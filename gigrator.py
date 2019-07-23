@@ -1,13 +1,23 @@
-import requests
-import config as config
 import json
 import os
 import sys
-from urllib import parse
+
+import requests
+
+# import private as config
+import config
 from settings import support, repos_dir
 
 success_count = 0
 failed_repos = []
+
+
+def set_failed_repos(data):
+    failed_repos.append(data)
+
+
+def set_success_count(data=success_count):
+    data += 1
 
 
 def list_repos(server):
@@ -46,12 +56,12 @@ def list_repos(server):
         list_repos_url = api + '/user/repos?access_token=' + token \
                          + '&type=personal&sort=full_name&per_page=100&page='
 
-    elif server_type == 'gitea':
+    elif server_type == 'gitea' or server_type == 'gogs':
         # GET
         # ​/user​/repos
         # List the repos that the authenticated user owns or has access to
         # gitea没有做分页: https://github.com/go-gitea/gitea/issues/7515
-        list_repos_url = api + '/user/repos?access_token=' + token
+        list_repos_url = api + '/user/repos'
 
         r = requests.get(list_repos_url, headers=headers)
         repos = json.loads(r.content.decode('utf-8'))
@@ -100,7 +110,6 @@ def list_repos(server):
         r = requests.get(list_repos_url + str(page), headers=headers)
         if r.status_code == 200:
             repos = json.loads(r.content.decode('utf-8'))
-            print(r.content.decode('utf-8'))
             if len(repos) == 0:
                 break
             all_repos.extend(repos)
@@ -139,7 +148,13 @@ def autoconfig(config):
     server_type = config['type']
     username = config['username']
     token = config['token']
-    self_hosted = config['self_hosted']
+    url = config['url']
+
+    if server_type == 'gitlab' or server_type == 'gitea' or server_type == 'gogs':
+        if url == '' or url is None:
+            print('gitlab, gitea 和 gogs 需要设置url')
+            return None
+
     if server_type == '' or server_type is None:
         print('没有配置type')
         return None
@@ -153,13 +168,6 @@ def autoconfig(config):
     if server_type not in support:
         print('暂不支持此类型的Git服务器: ' + server_type)
         return None
-
-    url = None
-    if self_hosted:
-        url = config['url']
-        if url is None or url == '':
-            print('自托管的Git服务器需要设置访问地址 url')
-            return None
 
     if server_type == 'github':
         config['ssh_prefix'] = 'git@github.com:'
@@ -179,24 +187,16 @@ def autoconfig(config):
         config['headers'] = {
             'PRIVATE-TOKEN': config['token']
         }
-        if self_hosted:
-            config['ssh_prefix'] = 'git@' + url.split('://')[1] + ':'
-            config['api'] = url + '/api/v4'
-        else:
-            config['ssh_prefix'] = 'git@gitlab.com:'
-            config['api'] = 'https://gitlab.com/api/v5'
+        config['ssh_prefix'] = 'git@' + url.split('://')[1] + ':'
+        config['api'] = url + '/api/v4'
 
-    elif server_type == 'gitea':
+    elif server_type == 'gitea' or server_type == 'gogs':
         config['headers'] = {
-            'accept': 'application/json',
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'Authorization': 'token ' + config['token']
         }
-        if self_hosted:
-            config['ssh_prefix'] = 'git@' + url.split('://')[1] + ':'
-            config['api'] = url + '/api/v1'
-        else:
-            config['ssh_prefix'] = 'git@gitea.com:'
-            config['api'] = 'https://gitea.com/api/v1'
+        config['ssh_prefix'] = 'git@' + url.split('://')[1] + ':'
+        config['api'] = url + '/api/v1'
 
     elif server_type == 'coding':
         config['headers'] = {
@@ -206,6 +206,23 @@ def autoconfig(config):
         config['api'] = 'https://coding.net'
 
     return config
+
+
+def is_empty(server_type, repo):
+    """
+    检查是否为空仓库
+
+    :param server_type: Git服务器配置
+    :param repo: 完整的仓库信息
+    :return: 是否为空仓库
+    """
+    if server_type == 'gitlab':
+        return repo['empty_repo']
+
+
+def quit(signum, frame):
+    print('终止所有迁移')
+    sys.exit()
 
 
 if __name__ == "__main__":
@@ -239,40 +256,24 @@ if __name__ == "__main__":
     # 输入需要迁移的仓库
     migrate_repos = input('请指定需要迁移的仓库(例如: repo1_name, repo2_name, 默认迁移所有仓库): ').replace(' ', '').split(',')
     # 迁移所有仓库
-    from migrate import migrate
+    threads = []
+    from WorkThread import WorkThread
     if len(migrate_repos) == 1 and migrate_repos[0] == '':
-        print('开始迁移所有仓库')
         for repo in repos:
-            r = migrate(repo=repo, source=source, dest=dest)
-            if r == 1:
-                print('终止所有迁移')
-                sys.exit(0)
-            elif r == 2:
-                print(repo['name'] + ' 仓库迁移失败')
-                failed_repos.append(repo['name'])
-            else:
-                print('仓库 ' + repo['name'] + ' 迁移成功!')
-                success_count += 1
-
+            threads.append(WorkThread(repo=repo, source=source, dest=dest))
     # 迁移指定仓库
     else:
-        print('开始迁移指定仓库')
-        # 循环进行仓库迁移
         for migrate_repo in migrate_repos:
             for repo in repos:
                 if repo['name'].lower() == migrate_repo.lower():
-                    r = migrate(repo=repo, source=source, dest=dest)
-                    if r == 1:
-                        print('终止所有迁移')
-                        sys.exit(0)
-                    elif r == 2:
-                        print(repo['name'] + ' 仓库迁移失败')
-                        failed_repos.append(repo['name'])
-                    else:
-                        print('仓库 ' + repo['name'] + ' 迁移成功!')
-                        success_count += 1
-                    break
+                    threads.append(WorkThread(repo=repo, source=source, dest=dest))
 
+    print('开始迁移仓库')
+    for t in threads:
+        t.start()
+
+    for t in threads:
+        t.join()
     print('成功迁移' + str(success_count) + '个仓库')
     # 打印迁移失败的repos
     if len(failed_repos) != 0:

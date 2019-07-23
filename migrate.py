@@ -37,11 +37,11 @@ def is_existed(server, repo_name):
         # 获取用户的某个仓库: GET /repos/{owner}/{repo}
         # https://gitee.com/api/v5/swagger#/getV5ReposOwnerRepo
         check_url = api + '/repos/' + username + '/' + repo_name + '?access_token=' + token
-    elif server_type == 'gitea':
+    elif server_type == 'gitea' or server_type == 'gogs':
         # GET
         # ​/repos​/{owner}​/{repo}
         # Get a repository
-        check_url = api + '/repos/' + username + '/' + repo_name + '?access_token=' + token
+        check_url = api + '/repos/' + username + '/' + repo_name
 
     r = requests.get(check_url, headers=headers)
     if r.status_code == 200:
@@ -138,7 +138,7 @@ def create_repo(server, repo, source_type):
         data = json.dumps(json_data)
         create_repo_url = api + '/user/repos'
 
-    elif server_type == 'gitea':
+    elif server_type == 'gitea' or server_type == 'gogs':
         # POST
         # ​/user​/repos
         # Create a repository
@@ -152,7 +152,7 @@ def create_repo(server, repo, source_type):
         # bug
         # \u200b: 看不见的分隔符 Zero-width space
         # create_repo_url = config.gitea_api + '/user​/repos?access_token=' + config.gitea_token
-        create_repo_url = api + '/user/repos?access_token=' + token
+        create_repo_url = api + '/user/repos'
 
     r = requests.post(create_repo_url, headers=headers, data=data)
     if r.status_code != 201:
@@ -186,9 +186,10 @@ def migrate(repo, source, dest):
     """
     repo_name = repo['name']
 
-    if is_existed(dest, repo_name):
-        print('您所在目的Git服务已存在' + repo_name + '仓库! 故此仓库无法迁移')
-        return 2
+    # if is_existed(dest, repo_name):
+    #     print('您所在目的Git服务已存在' + repo_name + '仓库! 故此仓库无法迁移')
+    #     return 1
+        # TODO important
 
     repo_dir = clone_repo(source, repo_name)
     if repo_dir is None:
